@@ -1,17 +1,27 @@
-#include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <PubSubClient.h>
-#include <ArduinoJson.h>
+#ifndef CONFIG_H
+#define CONFIG_H
 
-// Replace with your network credentials
+// WiFi Configuration
 const char* WIFI_SSID = "Saul Guizada";
 const char* WIFI_PASS = "iotprueba";
 
-// Replace with your MQTT broker details
+// MQTT Configuration
 const char* MQTT_BROKER = "abmisr4l2y1c3-ats.iot.us-east-2.amazonaws.com";
 const int MQTT_PORT = 8883;
 const char* CLIENT_ID = "ESP-32";
 
+// AWS IoT Shadow topics
+const char* UPDATE_TOPIC = "$aws/things/DameTuCosita/shadow/update";
+const char* UPDATE_DELTA_TOPIC = "$aws/things/DameTuCosita/shadow/update/delta";
+
+// Pin Configuration
+const int PUMP_PIN = 23;
+const int MQ2_SENSOR_PIN = 34;
+
+// Timing Configuration
+const unsigned long SENSOR_READ_INTERVAL = 2000;
+
+// Certificates
 // Amazon Root CA
 const char AMAZON_ROOT_CA1[] PROGMEM = R"EOF(
 -----BEGIN CERTIFICATE-----
@@ -91,145 +101,4 @@ WdtuyWp1AaR5iPE+RBD1Y9qKKHwk99DMRyjHh4l7olRQoRZ0EPZx
 -----END RSA PRIVATE KEY-----
 )KEY";
 
-// AWS IoT Shadow topics
-const char* UPDATE_TOPIC = "$aws/things/DameTuCosita/shadow/update";
-const char* UPDATE_DELTA_TOPIC = "$aws/things/DameTuCosita/shadow/update/delta";
-
-// Pins
-const int PUMP_PIN = 23;
-const int MQ2_SENSOR_PIN = 34;
-
-WiFiClientSecure wiFiClient;
-PubSubClient client(wiFiClient);
-
-StaticJsonDocument<JSON_OBJECT_SIZE(64)> inputDoc;
-StaticJsonDocument<JSON_OBJECT_SIZE(16)> outputDoc;
-char outputBuffer[256];
-
-byte pump_is_on = 0;
-int gas_ppm = 0;
-
-unsigned long lastSensorReadTime = 0;
-const unsigned long sensorReadInterval = 2000;
-
-void reportDeviceState() {
-  outputDoc.clear();
-  JsonObject reportedState = outputDoc["state"].createNestedObject("reported");
-  reportedState["bomba"] = pump_is_on;
-  reportedState["gas_ppm"] = gas_ppm;
-
-  serializeJson(outputDoc, outputBuffer);
-  client.publish(UPDATE_TOPIC, outputBuffer);
-  Serial.println("Reported state: " + String(outputBuffer));
-}
-
-void setPumpState() {
-  digitalWrite(PUMP_PIN, pump_is_on ? HIGH : LOW);
-  Serial.println(pump_is_on ? "Pump turned ON" : "Pump turned OFF");
-  reportDeviceState();
-}
-
-void readGasSensor() {
-  int sensorValue = analogRead(MQ2_SENSOR_PIN);
-  gas_ppm = map(sensorValue, 0, 4095, 0, 1000);
-  Serial.print("Gas sensor reading: ");
-  Serial.print(sensorValue);
-  Serial.print(" (Raw), ");
-  Serial.print(gas_ppm);
-  Serial.println(" PPM");
-}
-
-void callback(char* topic, byte* payload, unsigned int length) {
-  String message;
-  for (int i = 0; i < length; i++) message += (char)payload[i];
-  Serial.println("Message from topic " + String(topic) + ": " + message);
-
-  DeserializationError err = deserializeJson(inputDoc, payload);
-  if (!err) {
-    if (String(topic) == UPDATE_DELTA_TOPIC) {
-      JsonVariant bomba = inputDoc["state"]["bomba"];
-      if (!bomba.isNull()) {
-        pump_is_on = bomba.as<int8_t>();
-        setPumpState();
-      }
-    }
-  } else {
-    Serial.print("deserializeJson() failed: ");
-    Serial.println(err.c_str());
-  }
-}
-
-void setupWiFi() {
-  delay(10);
-  Serial.print("Connecting to ");
-  Serial.println(WIFI_SSID);
-
-  WiFi.disconnect(true); // Reset WiFi: borra configuración previa
-  delay(1000);           // Espera un momento para asegurar el reinicio del WiFi
-
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println();
-  Serial.print("Connected to WiFi. IP address: ");
-  Serial.println(WiFi.localIP());
-}
-void reconnect() {
-  while (!client.connected()) {
-    Serial.print("Attempting MQTT connection...");
-    if (client.connect(CLIENT_ID)) {
-      Serial.println("connected");
-      client.subscribe(UPDATE_DELTA_TOPIC);
-      Serial.println("Subscribed to " + String(UPDATE_DELTA_TOPIC));
-      
-      // Added: Report device state immediately after connection
-      delay(100); // Short delay to ensure subscription is complete
-      reportDeviceState();
-    } else {
-      Serial.print("failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
-      delay(5000);
-    }
-  }
-}
-
-void setup() {
-  Serial.begin(115200);
-
-  pinMode(PUMP_PIN, OUTPUT);
-  pinMode(MQ2_SENSOR_PIN, INPUT);
-  
-  digitalWrite(PUMP_PIN, LOW);
-
-  setupWiFi();
-
-  wiFiClient.setCACert(AMAZON_ROOT_CA1);
-  wiFiClient.setCertificate(CERTIFICATE);
-  wiFiClient.setPrivateKey(PRIVATE_KEY);
-
-  client.setServer(MQTT_BROKER, MQTT_PORT);
-  client.setCallback(callback);
-
-  readGasSensor();
-  Serial.println("Setup complete.");
-}
-
-void loop() {
-  if (!client.connected()) {
-    reconnect();
-  }
-  client.loop();
-
-  unsigned long now = millis();
-  if (now - lastSensorReadTime > sensorReadInterval) {
-    lastSensorReadTime = now;
-    readGasSensor();
-    reportDeviceState();
-  }
-}
+#endif // CONFIG_H
